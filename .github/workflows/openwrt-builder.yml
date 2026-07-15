@@ -1,4 +1,4 @@
-name: OpenWrt Native ImageBuilder
+name: OpenWrt Custom Image Builder
 
 on:
   workflow_dispatch:
@@ -20,21 +20,26 @@ on:
         required: false
         default: 'luci luci-ssl kmod-usb-net kmod-usb-net-rtl8152 fdisk blkid wget curl nano htop'
 
-# WAJIB: Izin untuk membuat Rilis di repositori kamu
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build OpenWrt Firmware
+    name: Build & Pack Custom Image
     runs-on: ubuntu-latest
     
     steps:
+      # 1. Checkout (Wajib agar folder 'boot' di repomu terbaca oleh Actions)
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Install Dependensi Build
       - name: Install Dependensi Build
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 qemu-utils zstd
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 qemu-utils zstd parted e2fsprogs dosfstools
 
+      # 3. Download & Jalankan ImageBuilder
       - name: Download & Jalankan ImageBuilder
         run: |
           RELEASE="${{ github.event.inputs.release }}"
@@ -42,7 +47,6 @@ jobs:
           PROFILE="${{ github.event.inputs.profile }}"
           PACKAGES="${{ github.event.inputs.packages }}"
 
-          # Mengubah garis miring menjadi strip dengan cara yang lebih aman (anti-error spasi)
           TARGET_DASHED="${TARGET//\//-}"
           
           if [ "$RELEASE" == "SNAPSHOT" ]; then
@@ -68,28 +72,85 @@ jobs:
           
           make image PROFILE="$PROFILE" PACKAGES="$PACKAGES"
           
+          # Susun hasil build (Memastikan file .tar.gz juga ikut disalin)
           mkdir -p ../output_firmware
-          find bin/targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.img.gz" -o -name "*.img" \) -exec cp {} ../output_firmware/ \;
+          find bin/targets/ -type f \( -name "*.tar.gz" -o -name "*.img.gz" \) -exec cp {} ../output_firmware/ \;
 
           TIMESTAMP=$(date +%Y%m%d-%H%M)
           echo "TAG_NAME=v${RELEASE}-${TARGET_DASHED}-${PROFILE}-${TIMESTAMP}" >> $GITHUB_ENV
-          echo "RELEASE_NAME=OpenWrt ${RELEASE} -${PROFILE} (${TIMESTAMP})" >> $GITHUB_ENV
+          echo "RELEASE_NAME=OpenWrt ${RELEASE} - Custom Boot (${TIMESTAMP})" >> $GITHUB_ENV
+          echo "IMG_NAME=custom-openwrt-${RELEASE}-${TARGET_DASHED}-${PROFILE}.img" >> $GITHUB_ENV
 
+      # 4. Merakit Ulang Image Menggunakan Script Kamu
+      - name: Create Custom Disk Image
+        run: |
+          cd output_firmware
+          
+          # Mencari file rootfs.tar.gz hasil dari ImageBuilder
+          ROOTFS_TAR=$(find . -name "*-rootfs.tar.gz" | head -n 1)
+          
+          if [ -z "$ROOTFS_TAR" ]; then
+            echo "Error: File rootfs.tar.gz tidak ditemukan!"
+            exit 1
+          fi
+
+          echo "Membuat image: ${{ env.IMG_NAME }} sebesar 1GB..."
+          fallocate -l 1G "${{ env.IMG_NAME }}"
+          
+          echo "Membuat tabel partisi MBR/msdos..."
+          sudo parted -s "${{ env.IMG_NAME }}" mklabel msdos
+          
+          echo "Membuat partisi BOOT (128MB) dan ROOTFS (Sisa)..."
+          sudo parted -s "${{ env.IMG_NAME }}" mkpart primary fat32 4MiB 132MiB
+          sudo parted -s "${{ env.IMG_NAME }}" mkpart primary ext4 132MiB 100%
+          
+          echo "Memetakan ke loop device..."
+          LOOP_DEV=$(sudo losetup -P -f --show "${{ env.IMG_NAME }}")
+          sleep 1
+          
+          echo "Memformat partisi..."
+          sudo mkfs.fat -F 32 -n "BOOT" "${LOOP_DEV}p1"
+          sudo mkfs.ext4 -F -L "ROOTFS" "${LOOP_DEV}p2"
+          
+          echo "Mounting partisi..."
+          mkdir -p mnt_boot mnt_rootfs
+          sudo mount "${LOOP_DEV}p1" mnt_boot
+          sudo mount "${LOOP_DEV}p2" mnt_rootfs
+          
+          echo "Menyalin isi folder 'boot' dari repositori ke partisi BOOT..."
+          # GITHUB_WORKSPACE adalah path utama tempat repomu di-checkout
+          sudo cp -r $GITHUB_WORKSPACE/boot/* mnt_boot/
+          
+          echo "Mengekstrak ROOTFS ke partisi ROOTFS..."
+          # Menggunakan --numeric-owner agar permission rootfs tidak rusak
+          sudo tar -xzf "$ROOTFS_TAR" -C mnt_rootfs/ --numeric-owner
+          
+          echo "Melepas mount dan loop device..."
+          sudo umount mnt_boot mnt_rootfs
+          sudo losetup -d "$LOOP_DEV"
+          
+          echo "Mengompresi hasil akhir..."
+          gzip -9 "${{ env.IMG_NAME }}"
+          
+          # Menghapus file mentah lainnya agar yang diupload hanya hasil custom
+          rm -f *.tar.gz openwrt-*combined*.img.gz openwrt-*squashfs*.img.gz
+          
+          echo "✅ Selesai merakit image!"
+
+      # 5. Upload ke GitHub Releases
       - name: Upload Firmware ke GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG_NAME }}
           name: ${{ env.RELEASE_NAME }}
-          files: output_firmware/*
+          files: output_firmware/*.img.gz
           body: |
             ### Custom OpenWrt Firmware Build 🚀
-            - **Versi OpenWrt:** `${{ github.event.inputs.release }}`
+            - **Versi:** `${{ github.event.inputs.release }}`
             - **Target:** `${{ github.event.inputs.target }}`
             - **Profile:** `${{ github.event.inputs.profile }}`
-            - **Paket yang di-install:** 
-              ```text
-              ${{ github.event.inputs.packages }}
-              ```
-            *Dibangun secara otomatis menggunakan GitHub Actions.*
+            - **Layout Disk:** `BOOT (FAT32 Custom)` + `ROOTFS (EXT4)` (Total 1GB)
+            
+            *Dibangun & dirakit secara otomatis menggunakan GitHub Actions berdasarkan folder 'boot' repositori.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
