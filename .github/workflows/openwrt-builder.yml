@@ -42,7 +42,8 @@ jobs:
           PROFILE="${{ github.event.inputs.profile }}"
           PACKAGES="${{ github.event.inputs.packages }}"
 
-          TARGET_DASHED=$(echo$TARGET | tr / -)
+          # Mengubah garis miring menjadi strip dengan cara yang lebih aman (anti-error spasi)
+          TARGET_DASHED="${TARGET//\//-}"
           
           if [ "$RELEASE" == "SNAPSHOT" ]; then
             BASE_URL="https://downloads.openwrt.org/snapshots/targets/${TARGET}"
@@ -70,7 +71,6 @@ jobs:
           mkdir -p ../output_firmware
           find bin/targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.img.gz" -o -name "*.img" \) -exec cp {} ../output_firmware/ \;
 
-          # Bikin Tag unik menggunakan Waktu agar tidak menimpa rilis sebelumnya
           TIMESTAMP=$(date +%Y%m%d-%H%M)
           echo "TAG_NAME=v${RELEASE}-${TARGET_DASHED}-${PROFILE}-${TIMESTAMP}" >> $GITHUB_ENV
           echo "RELEASE_NAME=OpenWrt ${RELEASE} -${PROFILE} (${TIMESTAMP})" >> $GITHUB_ENV
