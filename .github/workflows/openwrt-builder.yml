@@ -84,7 +84,7 @@ jobs:
 
           TIMESTAMP=$(date +%Y%m%d-%H%M)
           echo "TAG_NAME=v${RELEASE}-${TARGET_DASHED}-${PROFILE}-${TIMESTAMP}" >> $GITHUB_ENV
-          echo "RELEASE_NAME=OpenWrt ${RELEASE} - Custom Boot (${TIMESTAMP})" >> $GITHUB_ENV
+          echo "RELEASE_NAME=OpenWrt ${RELEASE} - Custom Amlogic (${TIMESTAMP})" >> $GITHUB_ENV
           echo "IMG_NAME=custom-openwrt-${RELEASE}-${TARGET_DASHED}-${PROFILE}.img" >> $GITHUB_ENV
 
       - name: Create Custom Disk Image
@@ -98,7 +98,6 @@ jobs:
             exit 1
           fi
 
-          # Menggunakan variabel ukuran disk dari input UI
           DISK_SIZE="${{ github.event.inputs.disk_size }}"
           
           echo "Membuat image: ${{ env.IMG_NAME }} sebesar ${DISK_SIZE}..."
@@ -107,11 +106,9 @@ jobs:
           echo "Membuat tabel partisi MBR/msdos..."
           sudo parted -s "${{ env.IMG_NAME }}" mklabel msdos
           
-          # Partisi BOOT dikunci statis 128MB (4MiB sampai 132MiB)
           echo "Membuat partisi BOOT (128MB)..."
           sudo parted -s "${{ env.IMG_NAME }}" mkpart primary fat32 4MiB 132MiB
           
-          # Partisi ROOTFS akan mengambil semua sisa disk (dari 132MiB hingga 100%)
           echo "Membuat partisi ROOTFS (Sisa Ruang)..."
           sudo parted -s "${{ env.IMG_NAME }}" mkpart primary ext4 132MiB 100%
           
@@ -128,11 +125,22 @@ jobs:
           sudo mount "${LOOP_DEV}p1" mnt_boot
           sudo mount "${LOOP_DEV}p2" mnt_rootfs
           
-          echo "Menyalin isi folder 'boot' dari repositori ke partisi BOOT..."
-          sudo cp -r $GITHUB_WORKSPACE/boot/* mnt_boot/
+          echo "[1/4] Menyalin isi folder 'boot' dari repositori ke partisi BOOT..."
+          if [ -d "$GITHUB_WORKSPACE/boot" ] && [ "$(ls -A $GITHUB_WORKSPACE/boot)" ]; then
+            sudo cp -r $GITHUB_WORKSPACE/boot/* mnt_boot/
+          fi
           
-          echo "Mengekstrak ROOTFS ke partisi ROOTFS..."
+          echo "[2/4] Mengekstrak ROOTFS bawaan OpenWrt ke partisi ROOTFS..."
           sudo tar -xzf "$ROOTFS_TAR" -C mnt_rootfs/ --numeric-owner
+          
+          echo "[3/4] Mengunduh & Mengekstrak Kernel (Image, dtb) Amlogic ke partisi BOOT..."
+          wget -q "https://github.com/sib0ndt/linux/releases/download/kernel-amlogic-7.0.0/boot-7.0.0.tar.gz" -O custom-boot.tar.gz
+          sudo tar -xzf custom-boot.tar.gz -C mnt_boot/
+          
+          echo "[4/4] Mengunduh & Mengekstrak Kernel Modules Amlogic ke partisi ROOTFS..."
+          wget -q "https://github.com/sib0ndt/linux/releases/download/kernel-amlogic-7.0.0/rootfs-7.0.0.tar.gz" -O custom-rootfs.tar.gz
+          # Menggunakan --numeric-owner agar permission folder modules tetap root
+          sudo tar -xzf custom-rootfs.tar.gz -C mnt_rootfs/ --numeric-owner
           
           echo "Melepas mount dan loop device..."
           sudo umount mnt_boot mnt_rootfs
@@ -141,10 +149,10 @@ jobs:
           echo "Mengompresi hasil akhir..."
           gzip -9 "${{ env.IMG_NAME }}"
           
-          # Menghapus file bawaan OpenWrt agar rilis bersih
-          rm -f openwrt-*.img.gz openwrt-*.tar.gz
+          # Hapus file mentahan agar rilis bersih
+          rm -f openwrt-*.img.gz openwrt-*.tar.gz custom-boot.tar.gz custom-rootfs.tar.gz
           
-          echo "✅ Selesai merakit image berukuran ${DISK_SIZE}!"
+          echo "✅ Selesai merakit image berukuran ${DISK_SIZE} dengan Kernel Amlogic!"
 
       - name: Upload Firmware ke GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -158,8 +166,9 @@ jobs:
             - **Target:** `${{ github.event.inputs.target }}`
             - **Profile:** `${{ github.event.inputs.profile }}`
             - **Ukuran Total Disk:** `${{ github.event.inputs.disk_size }}`
+            - **Kernel Injeksi:** `Amlogic 7.0.0`
             - **Layout Disk:** `BOOT (FAT32 Custom, 128MB)` + `ROOTFS (EXT4, Sisa Kapasitas)`
             
-            *Dibangun & dirakit secara otomatis menggunakan GitHub Actions berdasarkan folder 'boot' repositori.*
+            *Dibangun & dirakit secara otomatis menggunakan GitHub Actions.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
