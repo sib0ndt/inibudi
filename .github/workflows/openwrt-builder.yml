@@ -20,6 +20,10 @@ on:
         required: false
         default: 'luci luci-ssl kmod-usb-net kmod-usb-net-rtl8152 fdisk blkid wget curl nano htop'
 
+# WAJIB: Izin untuk membuat Rilis di repositori kamu
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build OpenWrt Firmware
@@ -38,10 +42,8 @@ jobs:
           PROFILE="${{ github.event.inputs.profile }}"
           PACKAGES="${{ github.event.inputs.packages }}"
 
-          # Ubah garis miring menjadi strip untuk penamaan file dari server
-          TARGET_DASHED=$(echo $TARGET | tr / -)
+          TARGET_DASHED=$(echo$TARGET | tr / -)
           
-          # Atur Base URL dan Prefix Nama File (Pisahkan logika rilis stabil vs SNAPSHOT)
           if [ "$RELEASE" == "SNAPSHOT" ]; then
             BASE_URL="https://downloads.openwrt.org/snapshots/targets/${TARGET}"
             FILE_PREFIX="openwrt-imagebuilder-${TARGET_DASHED}.Linux-x86_64"
@@ -50,7 +52,6 @@ jobs:
             FILE_PREFIX="openwrt-imagebuilder-${RELEASE}-${TARGET_DASHED}.Linux-x86_64"
           fi
           
-          # Cek apakah server menggunakan format .zst atau .xz
           if wget -q --spider "${BASE_URL}/${FILE_PREFIX}.tar.zst"; then
             FILE_NAME="${FILE_PREFIX}.tar.zst"
           else
@@ -60,26 +61,35 @@ jobs:
           echo "Mengunduh: ${BASE_URL}/${FILE_NAME}"
           wget -q "${BASE_URL}/${FILE_NAME}" || { echo "Gagal mengunduh ImageBuilder!"; exit 1; }
           
-          # Ekstrak file arsip
           tar -xf "${FILE_NAME}"
-          
-          # HAPUS file arsip (.zst/.xz) agar tidak bentrok dengan perintah cd di bawah
           rm -f "${FILE_NAME}"
-          
-          # Masuk ke folder hasil ekstrak (sekarang aman karena hanya ada 1 folder yang cocok)
           cd openwrt-imagebuilder-*
           
-          # Mulai proses pembuatan firmware
           make image PROFILE="$PROFILE" PACKAGES="$PACKAGES"
           
-          # Kumpulkan hasil build
           mkdir -p ../output_firmware
           find bin/targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.img.gz" -o -name "*.img" \) -exec cp {} ../output_firmware/ \;
 
-          echo "artifact_name=openwrt-${RELEASE}-${TARGET_DASHED}-${PROFILE}" >> $GITHUB_ENV
+          # Bikin Tag unik menggunakan Waktu agar tidak menimpa rilis sebelumnya
+          TIMESTAMP=$(date +%Y%m%d-%H%M)
+          echo "TAG_NAME=v${RELEASE}-${TARGET_DASHED}-${PROFILE}-${TIMESTAMP}" >> $GITHUB_ENV
+          echo "RELEASE_NAME=OpenWrt ${RELEASE} -${PROFILE} (${TIMESTAMP})" >> $GITHUB_ENV
 
-      - name: Upload Firmware ke Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload Firmware ke GitHub Releases
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ env.artifact_name }}
-          path: output_firmware/
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.RELEASE_NAME }}
+          files: output_firmware/*
+          body: |
+            ### Custom OpenWrt Firmware Build 🚀
+            - **Versi OpenWrt:** `${{ github.event.inputs.release }}`
+            - **Target:** `${{ github.event.inputs.target }}`
+            - **Profile:** `${{ github.event.inputs.profile }}`
+            - **Paket yang di-install:** 
+              ```text
+              ${{ github.event.inputs.packages }}
+              ```
+            *Dibangun secara otomatis menggunakan GitHub Actions.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
