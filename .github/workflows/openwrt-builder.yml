@@ -135,7 +135,7 @@ jobs:
           
           echo "[3/4] Mengunduh & Mengekstrak Kernel (Image, dtb) Amlogic ke partisi BOOT..."
           wget -q "https://github.com/sib0ndt/linux/releases/download/kernel-amlogic-7.0.0/boot-7.0.0.tar.gz" -O custom-boot.tar.gz
-          sudo tar -xzf custom-boot.tar.gz -C mnt_boot/
+          sudo tar -xzf custom-boot.tar.gz -C mnt_boot/ --no-same-owner
           
           echo "[4/4] Mengunduh & Mengekstrak Kernel Modules Amlogic ke partisi ROOTFS..."
           wget -q "https://github.com/sib0ndt/linux/releases/download/kernel-amlogic-7.0.0/rootfs-7.0.0.tar.gz" -O custom-rootfs.tar.gz
