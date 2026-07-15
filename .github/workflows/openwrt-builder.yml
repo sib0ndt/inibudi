@@ -15,6 +15,16 @@ on:
         description: 'Profile (contoh: generic)'
         required: true
         default: 'generic'
+      disk_size:
+        description: 'Ukuran Total Disk Image'
+        required: true
+        default: '1G'
+        type: choice
+        options:
+          - 1G
+          - 2G
+          - 4G
+          - 8G
       packages:
         description: 'Paket tambahan (pisahkan spasi)'
         required: false
@@ -29,17 +39,14 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      # 1. Checkout (Wajib agar folder 'boot' di repomu terbaca oleh Actions)
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 2. Install Dependensi Build
       - name: Install Dependensi Build
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 qemu-utils zstd parted e2fsprogs dosfstools
 
-      # 3. Download & Jalankan ImageBuilder
       - name: Download & Jalankan ImageBuilder
         run: |
           RELEASE="${{ github.event.inputs.release }}"
@@ -72,7 +79,6 @@ jobs:
           
           make image PROFILE="$PROFILE" PACKAGES="$PACKAGES"
           
-          # Susun hasil build (Memastikan file .tar.gz juga ikut disalin)
           mkdir -p ../output_firmware
           find bin/targets/ -type f \( -name "*.tar.gz" -o -name "*.img.gz" \) -exec cp {} ../output_firmware/ \;
 
@@ -81,12 +87,10 @@ jobs:
           echo "RELEASE_NAME=OpenWrt ${RELEASE} - Custom Boot (${TIMESTAMP})" >> $GITHUB_ENV
           echo "IMG_NAME=custom-openwrt-${RELEASE}-${TARGET_DASHED}-${PROFILE}.img" >> $GITHUB_ENV
 
-      # 4. Merakit Ulang Image Menggunakan Script Kamu
       - name: Create Custom Disk Image
         run: |
           cd output_firmware
           
-          # Mencari file rootfs.tar.gz hasil dari ImageBuilder
           ROOTFS_TAR=$(find . -name "*-rootfs.tar.gz" | head -n 1)
           
           if [ -z "$ROOTFS_TAR" ]; then
@@ -94,14 +98,21 @@ jobs:
             exit 1
           fi
 
-          echo "Membuat image: ${{ env.IMG_NAME }} sebesar 1GB..."
-          fallocate -l 1G "${{ env.IMG_NAME }}"
+          # Menggunakan variabel ukuran disk dari input UI
+          DISK_SIZE="${{ github.event.inputs.disk_size }}"
+          
+          echo "Membuat image: ${{ env.IMG_NAME }} sebesar ${DISK_SIZE}..."
+          fallocate -l "$DISK_SIZE" "${{ env.IMG_NAME }}"
           
           echo "Membuat tabel partisi MBR/msdos..."
           sudo parted -s "${{ env.IMG_NAME }}" mklabel msdos
           
-          echo "Membuat partisi BOOT (128MB) dan ROOTFS (Sisa)..."
+          # Partisi BOOT dikunci statis 128MB (4MiB sampai 132MiB)
+          echo "Membuat partisi BOOT (128MB)..."
           sudo parted -s "${{ env.IMG_NAME }}" mkpart primary fat32 4MiB 132MiB
+          
+          # Partisi ROOTFS akan mengambil semua sisa disk (dari 132MiB hingga 100%)
+          echo "Membuat partisi ROOTFS (Sisa Ruang)..."
           sudo parted -s "${{ env.IMG_NAME }}" mkpart primary ext4 132MiB 100%
           
           echo "Memetakan ke loop device..."
@@ -118,11 +129,9 @@ jobs:
           sudo mount "${LOOP_DEV}p2" mnt_rootfs
           
           echo "Menyalin isi folder 'boot' dari repositori ke partisi BOOT..."
-          # GITHUB_WORKSPACE adalah path utama tempat repomu di-checkout
           sudo cp -r $GITHUB_WORKSPACE/boot/* mnt_boot/
           
           echo "Mengekstrak ROOTFS ke partisi ROOTFS..."
-          # Menggunakan --numeric-owner agar permission rootfs tidak rusak
           sudo tar -xzf "$ROOTFS_TAR" -C mnt_rootfs/ --numeric-owner
           
           echo "Melepas mount dan loop device..."
@@ -132,12 +141,11 @@ jobs:
           echo "Mengompresi hasil akhir..."
           gzip -9 "${{ env.IMG_NAME }}"
           
-          # Menghapus file mentah lainnya agar yang diupload hanya hasil custom
-          rm -f *.tar.gz openwrt-*combined*.img.gz openwrt-*squashfs*.img.gz
+          # Menghapus file bawaan OpenWrt agar rilis bersih
+          rm -f openwrt-*.img.gz openwrt-*.tar.gz
           
-          echo "✅ Selesai merakit image!"
+          echo "✅ Selesai merakit image berukuran ${DISK_SIZE}!"
 
-      # 5. Upload ke GitHub Releases
       - name: Upload Firmware ke GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
@@ -149,7 +157,8 @@ jobs:
             - **Versi:** `${{ github.event.inputs.release }}`
             - **Target:** `${{ github.event.inputs.target }}`
             - **Profile:** `${{ github.event.inputs.profile }}`
-            - **Layout Disk:** `BOOT (FAT32 Custom)` + `ROOTFS (EXT4)` (Total 1GB)
+            - **Ukuran Total Disk:** `${{ github.event.inputs.disk_size }}`
+            - **Layout Disk:** `BOOT (FAT32 Custom, 128MB)` + `ROOTFS (EXT4, Sisa Kapasitas)`
             
             *Dibangun & dirakit secara otomatis menggunakan GitHub Actions berdasarkan folder 'boot' repositori.*
         env:
