@@ -125,22 +125,41 @@ jobs:
           sudo mount "${LOOP_DEV}p1" mnt_boot
           sudo mount "${LOOP_DEV}p2" mnt_rootfs
           
-          echo "[1/4] Menyalin isi folder 'boot' dari repositori ke partisi BOOT..."
+          echo "[1/5] Menyalin isi folder 'boot' dari repositori ke partisi BOOT..."
           if [ -d "$GITHUB_WORKSPACE/boot" ] && [ "$(ls -A $GITHUB_WORKSPACE/boot)" ]; then
             sudo cp -r $GITHUB_WORKSPACE/boot/* mnt_boot/
           fi
           
-          echo "[2/4] Mengekstrak ROOTFS bawaan OpenWrt ke partisi ROOTFS..."
+          echo "[2/5] Mengekstrak ROOTFS bawaan OpenWrt ke partisi ROOTFS..."
           sudo tar -xzf "$ROOTFS_TAR" -C mnt_rootfs/ --numeric-owner
           
-          echo "[3/4] Mengunduh & Mengekstrak Kernel (Image, dtb) Amlogic ke partisi BOOT..."
+          echo "[3/5] Mengunduh & Mengekstrak Kernel (Image, dtb) Amlogic ke partisi BOOT..."
           wget -q "https://github.com/sib0ndt/linux/releases/download/kernel-amlogic-7.0.0/boot-7.0.0.tar.gz" -O custom-boot.tar.gz
+          # Menggunakan --no-same-owner agar tidak error pada partisi FAT32
           sudo tar -xzf custom-boot.tar.gz -C mnt_boot/ --no-same-owner
           
-          echo "[4/4] Mengunduh & Mengekstrak Kernel Modules Amlogic ke partisi ROOTFS..."
+          echo "[4/5] Mengunduh & Mengekstrak Kernel Modules Amlogic ke partisi ROOTFS..."
           wget -q "https://github.com/sib0ndt/linux/releases/download/kernel-amlogic-7.0.0/rootfs-7.0.0.tar.gz" -O custom-rootfs.tar.gz
-          # Menggunakan --numeric-owner agar permission folder modules tetap root
           sudo tar -xzf custom-rootfs.tar.gz -C mnt_rootfs/ --numeric-owner
+          
+          echo "[5/5] Meratakan (Flatten) posisi Kernel Modules (.ko)..."
+          # Mendeteksi nama folder kversion secara dinamis (contoh: 7.0.0)
+          KVERSION=$(ls -1 mnt_rootfs/lib/modules/ | head -n 1)
+          if [ -n "$KVERSION" ]; then
+            MOD_DIR="mnt_rootfs/lib/modules/$KVERSION"
+            echo "Memproses folder modul: $MOD_DIR"
+            
+            # Memindahkan semua file .ko dari subfolder ke root $MOD_DIR
+            # -mindepth 2 memastikan kita hanya memindah yang ada di subfolder
+            sudo find "$MOD_DIR" -mindepth 2 -type f -name "*.ko" -exec mv {} "$MOD_DIR/" \;
+            
+            # (Opsional tapi disarankan) Menghapus sisa direktori/subfolder kosong
+            sudo find "$MOD_DIR" -mindepth 1 -type d -empty -delete
+            
+            echo "Selesai memindahkan .ko ke /lib/modules/$KVERSION"
+          else
+            echo "Peringatan: Folder /lib/modules/ tidak ditemukan!"
+          fi
           
           echo "Melepas mount dan loop device..."
           sudo umount mnt_boot mnt_rootfs
@@ -149,7 +168,6 @@ jobs:
           echo "Mengompresi hasil akhir..."
           gzip -9 "${{ env.IMG_NAME }}"
           
-          # Hapus file mentahan agar rilis bersih
           rm -f openwrt-*.img.gz openwrt-*.tar.gz custom-boot.tar.gz custom-rootfs.tar.gz
           
           echo "✅ Selesai merakit image berukuran ${DISK_SIZE} dengan Kernel Amlogic!"
