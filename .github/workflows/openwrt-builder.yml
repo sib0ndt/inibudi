@@ -1,4 +1,4 @@
-name: OpenWrt ImageBuilder (ARM64 EFI & Routers)
+name: OpenWrt Native ImageBuilder
 
 on:
   workflow_dispatch:
@@ -12,11 +12,11 @@ on:
         required: true
         default: 'armsr/64'
       profile:
-        description: 'Profile Router (contoh: generic)'
+        description: 'Profile (contoh: generic)'
         required: true
         default: 'generic'
       packages:
-        description: 'Paket tambahan (pisahkan dengan spasi, gunakan -paket untuk menghapus)'
+        description: 'Paket tambahan (pisahkan spasi, gunakan -paket untuk hapus)'
         required: false
         default: 'luci luci-ssl kmod-usb-net kmod-usb-net-rtl8152 fdisk blkid wget curl nano htop'
 
@@ -26,25 +26,61 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Build custom firmware menggunakan ImageBuilder
-        uses: aparcar/openwrt-imagebuilder-action@v3.0.0
-        with:
-          release: ${{ github.event.inputs.release }}
-          target: ${{ github.event.inputs.target }}
-          profile: ${{ github.event.inputs.profile }}
-          packages: ${{ github.event.inputs.packages }}
-
-      - name: Susun file hasil build
+      - name: Install Dependensi Build
         run: |
-          mkdir output_firmware
-          # Perintah ini akan menyalin file .img.gz, .img, sysupgrade, dan factory ke dalam satu folder
-          find bin/targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.img.gz" -o -name "*.img" \) -exec cp {} output_firmware/ \;
+          sudo apt-get update
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 qemu-utils
+
+      - name: Download & Jalankan ImageBuilder
+        run: |
+          # Ambil input dari form GitHub Actions
+          RELEASE="${{ github.event.inputs.release }}"
+          TARGET="${{ github.event.inputs.target }}"
+          PROFILE="${{ github.event.inputs.profile }}"
+          PACKAGES="${{ github.event.inputs.packages }}"
+
+          # Ubah garis miring pada target menjadi strip (contoh: armsr/64 menjadi armsr-64) untuk URL
+          TARGET_DASHED=$(echo $TARGET | tr / -)
+
+          echo "========================================================"
+          echo "Memulai Build untuk:"
+          echo "Versi   : $RELEASE"
+          echo "Target  : $TARGET"
+          echo "Profile : $PROFILE"
+          echo "Paket   : $PACKAGES"
+          echo "========================================================"
+
+          # Tentukan URL download resmi OpenWrt berdasarkan versi (Release vs SNAPSHOT)
+          if [ "$RELEASE" == "SNAPSHOT" ]; then
+            BASE_URL="https://downloads.openwrt.org/snapshots/targets/${TARGET}"
+            FILE_NAME="openwrt-imagebuilder-${TARGET_DASHED}.Linux-x86_64.tar.xz"
+          else
+            BASE_URL="https://downloads.openwrt.org/releases/${RELEASE}/targets/${TARGET}"
+            FILE_NAME="openwrt-imagebuilder-${RELEASE}-${TARGET_DASHED}.Linux-x86_64.tar.xz"
+          fi
+
+          echo "Mengunduh dari: ${BASE_URL}/${FILE_NAME}"
+          wget -q "${BASE_URL}/${FILE_NAME}" || { echo "Gagal mengunduh file ImageBuilder!"; exit 1; }
+          
+          # Ekstrak file tar.xz
+          tar -xf "${FILE_NAME}"
+          DIR_NAME=$(basename "${FILE_NAME}" .tar.xz)
+          
+          # Masuk ke folder hasil ekstrak dan jalankan perintah build
+          cd "${DIR_NAME}"
+          make image PROFILE="$PROFILE" PACKAGES="$PACKAGES"
+          
+          # Siapkan folder output di luar direktori ImageBuilder
+          mkdir -p ../output_firmware
+          # Kumpulkan semua file hasil build yang penting
+          find bin/targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.img.gz" -o -name "*.img" \) -exec cp {} ../output_firmware/ \;
+
+          # Siapkan nama file Artifacts yang aman (menghindari karakter slash '/')
+          ARTIFACT_NAME="openwrt-${RELEASE}-${TARGET_DASHED}-${PROFILE}"
+          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_ENV
 
       - name: Upload Firmware ke Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-${{ github.event.inputs.release }}-${{ github.event.inputs.target }}-${{ github.event.inputs.profile }}
+          name: ${{ env.artifact_name }}
           path: output_firmware/
