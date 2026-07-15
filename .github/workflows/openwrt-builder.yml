@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: 'Versi OpenWrt (contoh: 25.12.5, SNAPSHOT)'
+        description: 'Versi OpenWrt (contoh: 23.05.3, 25.12.5, SNAPSHOT)'
         required: true
         default: '25.12.5'
       target:
@@ -38,18 +38,19 @@ jobs:
           PROFILE="${{ github.event.inputs.profile }}"
           PACKAGES="${{ github.event.inputs.packages }}"
 
+          # Ubah garis miring menjadi strip untuk penamaan file dari server
           TARGET_DASHED=$(echo $TARGET | tr / -)
           
-          # Tentukan Base URL
+          # Atur Base URL dan Prefix Nama File (Pisahkan logika rilis stabil vs SNAPSHOT)
           if [ "$RELEASE" == "SNAPSHOT" ]; then
             BASE_URL="https://downloads.openwrt.org/snapshots/targets/${TARGET}"
+            FILE_PREFIX="openwrt-imagebuilder-${TARGET_DASHED}.Linux-x86_64"
           else
             BASE_URL="https://downloads.openwrt.org/releases/${RELEASE}/targets/${TARGET}"
+            FILE_PREFIX="openwrt-imagebuilder-${RELEASE}-${TARGET_DASHED}.Linux-x86_64"
           fi
-
-          FILE_PREFIX="openwrt-imagebuilder-${RELEASE}-${TARGET_DASHED}.Linux-x86_64"
           
-          # Cek apakah pakai .zst atau .tar.xz
+          # Cek apakah server menggunakan format .zst atau .xz
           if wget -q --spider "${BASE_URL}/${FILE_PREFIX}.tar.zst"; then
             FILE_NAME="${FILE_PREFIX}.tar.zst"
           else
@@ -59,14 +60,19 @@ jobs:
           echo "Mengunduh: ${BASE_URL}/${FILE_NAME}"
           wget -q "${BASE_URL}/${FILE_NAME}" || { echo "Gagal mengunduh ImageBuilder!"; exit 1; }
           
-          # Ekstrak (otomatis menangani .zst atau .xz)
+          # Ekstrak file arsip
           tar -xf "${FILE_NAME}"
           
-          # Masuk ke folder (mencari folder yang baru saja diekstrak)
+          # HAPUS file arsip (.zst/.xz) agar tidak bentrok dengan perintah cd di bawah
+          rm -f "${FILE_NAME}"
+          
+          # Masuk ke folder hasil ekstrak (sekarang aman karena hanya ada 1 folder yang cocok)
           cd openwrt-imagebuilder-*
           
+          # Mulai proses pembuatan firmware
           make image PROFILE="$PROFILE" PACKAGES="$PACKAGES"
           
+          # Kumpulkan hasil build
           mkdir -p ../output_firmware
           find bin/targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.img.gz" -o -name "*.img" \) -exec cp {} ../output_firmware/ \;
 
