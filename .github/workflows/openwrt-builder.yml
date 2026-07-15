@@ -133,9 +133,12 @@ jobs:
           echo "[2/5] Mengekstrak ROOTFS bawaan OpenWrt ke partisi ROOTFS..."
           sudo tar -xzf "$ROOTFS_TAR" -C mnt_rootfs/ --numeric-owner
           
+          # MENGHAPUS kernel bawaan OpenWrt
+          echo "      -> Membersihkan folder /lib/modules/ bawaan OpenWrt..."
+          sudo rm -rf mnt_rootfs/lib/modules/*
+          
           echo "[3/5] Mengunduh & Mengekstrak Kernel (Image, dtb) Amlogic ke partisi BOOT..."
           wget -q "https://github.com/sib0ndt/linux/releases/download/kernel-amlogic-7.0.0/boot-7.0.0.tar.gz" -O custom-boot.tar.gz
-          # Menggunakan --no-same-owner agar tidak error pada partisi FAT32
           sudo tar -xzf custom-boot.tar.gz -C mnt_boot/ --no-same-owner
           
           echo "[4/5] Mengunduh & Mengekstrak Kernel Modules Amlogic ke partisi ROOTFS..."
@@ -143,18 +146,16 @@ jobs:
           sudo tar -xzf custom-rootfs.tar.gz -C mnt_rootfs/ --numeric-owner
           
           echo "[5/5] Meratakan (Flatten) posisi Kernel Modules (.ko)..."
-          # Mendeteksi nama folder kversion secara dinamis (contoh: 7.0.0)
           KVERSION=$(ls -1 mnt_rootfs/lib/modules/ | head -n 1)
           if [ -n "$KVERSION" ]; then
             MOD_DIR="mnt_rootfs/lib/modules/$KVERSION"
             echo "Memproses folder modul: $MOD_DIR"
             
-            # Memindahkan semua file .ko dari subfolder ke root $MOD_DIR
-            # -mindepth 2 memastikan kita hanya memindah yang ada di subfolder
-            sudo find "$MOD_DIR" -mindepth 2 -type f -name "*.ko" -exec mv {} "$MOD_DIR/" \;
+            # Pindahkan secara paksa (-f) semua .ko ke root folder KVERSION
+            sudo find "$MOD_DIR" -mindepth 2 -type f -name "*.ko" -exec mv -f {} "$MOD_DIR/" \;
             
-            # (Opsional tapi disarankan) Menghapus sisa direktori/subfolder kosong
-            sudo find "$MOD_DIR" -mindepth 1 -type d -empty -delete
+            # Hapus semua subfolder yang tersisa (termasuk folder 'kernel') secara bersih
+            sudo rm -rf "$MOD_DIR"/*/
             
             echo "Selesai memindahkan .ko ke /lib/modules/$KVERSION"
           else
