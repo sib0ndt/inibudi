@@ -1,0 +1,50 @@
+name: OpenWrt ImageBuilder (ARM64 EFI & Routers)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Versi OpenWrt (contoh: 23.05.3, SNAPSHOT)'
+        required: true
+        default: '23.05.3'
+      target:
+        description: 'Target / Subtarget (contoh: armsr/64)'
+        required: true
+        default: 'armsr/64'
+      profile:
+        description: 'Profile Router (contoh: generic)'
+        required: true
+        default: 'generic'
+      packages:
+        description: 'Paket tambahan (pisahkan dengan spasi, gunakan -paket untuk menghapus)'
+        required: false
+        default: 'luci luci-ssl kmod-usb-net kmod-usb-net-rtl8152 fdisk blkid wget curl nano htop'
+
+jobs:
+  build:
+    name: Build OpenWrt Firmware
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build custom firmware menggunakan ImageBuilder
+        uses: aparcar/openwrt-imagebuilder-action@v3.0.0
+        with:
+          release: ${{ github.event.inputs.release }}
+          target: ${{ github.event.inputs.target }}
+          profile: ${{ github.event.inputs.profile }}
+          packages: ${{ github.event.inputs.packages }}
+
+      - name: Susun file hasil build
+        run: |
+          mkdir output_firmware
+          # Perintah ini akan menyalin file .img.gz, .img, sysupgrade, dan factory ke dalam satu folder
+          find bin/targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.img.gz" -o -name "*.img" \) -exec cp {} output_firmware/ \;
+
+      - name: Upload Firmware ke Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-${{ github.event.inputs.release }}-${{ github.event.inputs.target }}-${{ github.event.inputs.profile }}
+          path: output_firmware/
