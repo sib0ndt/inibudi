@@ -4,19 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: 'Versi OpenWrt (contoh: 23.05.3, SNAPSHOT)'
+        description: 'Versi OpenWrt (contoh: 25.12.5, SNAPSHOT)'
         required: true
-        default: '23.05.3'
+        default: '25.12.5'
       target:
-        description: 'Target / Subtarget (contoh: armsr/64)'
+        description: 'Target (contoh: armsr/armv8)'
         required: true
-        default: 'armsr/64'
+        default: 'armsr/armv8'
       profile:
         description: 'Profile (contoh: generic)'
         required: true
         default: 'generic'
       packages:
-        description: 'Paket tambahan (pisahkan spasi, gunakan -paket untuk hapus)'
+        description: 'Paket tambahan (pisahkan spasi)'
         required: false
         default: 'luci luci-ssl kmod-usb-net kmod-usb-net-rtl8152 fdisk blkid wget curl nano htop'
 
@@ -29,55 +29,48 @@ jobs:
       - name: Install Dependensi Build
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 qemu-utils
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 qemu-utils zstd
 
       - name: Download & Jalankan ImageBuilder
         run: |
-          # Ambil input dari form GitHub Actions
           RELEASE="${{ github.event.inputs.release }}"
           TARGET="${{ github.event.inputs.target }}"
           PROFILE="${{ github.event.inputs.profile }}"
           PACKAGES="${{ github.event.inputs.packages }}"
 
-          # Ubah garis miring pada target menjadi strip (contoh: armsr/64 menjadi armsr-64) untuk URL
           TARGET_DASHED=$(echo $TARGET | tr / -)
-
-          echo "========================================================"
-          echo "Memulai Build untuk:"
-          echo "Versi   : $RELEASE"
-          echo "Target  : $TARGET"
-          echo "Profile : $PROFILE"
-          echo "Paket   : $PACKAGES"
-          echo "========================================================"
-
-          # Tentukan URL download resmi OpenWrt berdasarkan versi (Release vs SNAPSHOT)
+          
+          # Tentukan Base URL
           if [ "$RELEASE" == "SNAPSHOT" ]; then
             BASE_URL="https://downloads.openwrt.org/snapshots/targets/${TARGET}"
-            FILE_NAME="openwrt-imagebuilder-${TARGET_DASHED}.Linux-x86_64.tar.xz"
           else
             BASE_URL="https://downloads.openwrt.org/releases/${RELEASE}/targets/${TARGET}"
-            FILE_NAME="openwrt-imagebuilder-${RELEASE}-${TARGET_DASHED}.Linux-x86_64.tar.xz"
           fi
 
-          echo "Mengunduh dari: ${BASE_URL}/${FILE_NAME}"
-          wget -q "${BASE_URL}/${FILE_NAME}" || { echo "Gagal mengunduh file ImageBuilder!"; exit 1; }
+          FILE_PREFIX="openwrt-imagebuilder-${RELEASE}-${TARGET_DASHED}.Linux-x86_64"
           
-          # Ekstrak file tar.xz
+          # Cek apakah pakai .zst atau .tar.xz
+          if wget -q --spider "${BASE_URL}/${FILE_PREFIX}.tar.zst"; then
+            FILE_NAME="${FILE_PREFIX}.tar.zst"
+          else
+            FILE_NAME="${FILE_PREFIX}.tar.xz"
+          fi
+
+          echo "Mengunduh: ${BASE_URL}/${FILE_NAME}"
+          wget -q "${BASE_URL}/${FILE_NAME}" || { echo "Gagal mengunduh ImageBuilder!"; exit 1; }
+          
+          # Ekstrak (otomatis menangani .zst atau .xz)
           tar -xf "${FILE_NAME}"
-          DIR_NAME=$(basename "${FILE_NAME}" .tar.xz)
           
-          # Masuk ke folder hasil ekstrak dan jalankan perintah build
-          cd "${DIR_NAME}"
+          # Masuk ke folder (mencari folder yang baru saja diekstrak)
+          cd openwrt-imagebuilder-*
+          
           make image PROFILE="$PROFILE" PACKAGES="$PACKAGES"
           
-          # Siapkan folder output di luar direktori ImageBuilder
           mkdir -p ../output_firmware
-          # Kumpulkan semua file hasil build yang penting
           find bin/targets/ -type f \( -name "*sysupgrade*" -o -name "*factory*" -o -name "*.img.gz" -o -name "*.img" \) -exec cp {} ../output_firmware/ \;
 
-          # Siapkan nama file Artifacts yang aman (menghindari karakter slash '/')
-          ARTIFACT_NAME="openwrt-${RELEASE}-${TARGET_DASHED}-${PROFILE}"
-          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_ENV
+          echo "artifact_name=openwrt-${RELEASE}-${TARGET_DASHED}-${PROFILE}" >> $GITHUB_ENV
 
       - name: Upload Firmware ke Artifacts
         uses: actions/upload-artifact@v4
